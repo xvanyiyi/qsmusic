@@ -1,4 +1,12 @@
-﻿# 汽水音乐解析 / 下载 / 登录工具（PHP）
+# 汽水音乐解析 / 下载 / 登录工具（PHP）
+
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![PHP](https://img.shields.io/badge/PHP-8.1%2B-777bb4.svg)](https://www.php.net/)
+[![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)]()
+[![Dependencies](https://img.shields.io/badge/deps-none-brightgreen.svg)]()
+[![Stars](https://img.shields.io/github/stars/xvanyiyi/qsmusic?style=social)](https://github.com/xvanyiyi/qsmusic/stargazers)
+
+[English](README.en.md) · **简体中文**
 
 逆向 `汽水音乐 PC 3.5.1`（Electron 客户端，内部代号 `luna` / `SodaMusic`）得到的完整实现：
 解析分享链接、拿源音频直链、解 CENC 加密拿到可播放的 m4a / FLAC、cookie 导入后解锁会员音质。
@@ -15,6 +23,9 @@
 | 语言 | PHP 8.1+ / Node 16（sidecar） |
 | 依赖 | 无 composer 包、无 npm 包 |
 | 许可 | [MIT](LICENSE) |
+| 平台 | Windows（签名 sidecar 依赖客户端自带的 Electron 运行时） |
+
+> 仅用于个人学习研究与协议分析。下载内容请自行确认授权，不要二次传播。
 
 ---
 

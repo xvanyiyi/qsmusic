@@ -1,0 +1,17 @@
+<?php
+
+/**
+ * 可选本地覆盖配置。
+ * 复制为 config/local.php 后生效。
+ */
+
+return [
+    // 签名 sidecar 地址
+    'signer_url' => 'http://127.0.0.1:8791',
+
+    // 下载目录（默认 storage/downloads）
+    // 'download_dir' => 'D:\\Music\\汽水',
+
+    // cookie 目录（默认 storage/cookies）
+    // 'cookie_dir' => __DIR__ . '/../storage/cookies',
+];

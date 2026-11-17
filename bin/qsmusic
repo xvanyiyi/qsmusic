@@ -1,0 +1,274 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * 汽水音乐命令行工具。
+ *
+ * 用法：
+ *   php bin/qsmusic health
+ *   php bin/qsmusic search "晴天"
+ *   php bin/qsmusic info 7146240707408168993
+ *   php bin/qsmusic url "https://qishui.douyin.com/s/xxxxx/"
+ *   php bin/qsmusic download "周杰伦 晴天" [--quality=higher] [--dir=D:\Music] [--account=current]
+ *   php bin/qsmusic login-qr
+ *   php bin/qsmusic login-import
+ *   php bin/qsmusic whoami
+ *   php bin/qsmusic decrypt <file.m4a> <key_hex> [out.m4a]
+ */
+
+require __DIR__ . '/../src/bootstrap.php';
+
+use Qsm\Config;
+use Qsm\CookieJar;
+use Qsm\Qishui\Cenc;
+use Qsm\Qishui\Importer;
+
+$argvList = $argv;
+array_shift($argvList);
+$cmd = array_shift($argvList) ?? 'help';
+
+$opts = [];
+$pos = [];
+foreach ($argvList as $a) {
+    if (str_starts_with($a, '--')) {
+        $kv = explode('=', substr($a, 2), 2);
+        $opts[$kv[0]] = $kv[1] ?? '1';
+    } else {
+        $pos[] = $a;
+    }
+}
+
+function out(string $s = ''): void
+{
+    fwrite(STDOUT, $s . PHP_EOL);
+}
+
+function fail(string $s, int $code = 1): never
+{
+    fwrite(STDERR, "[错误] " . $s . PHP_EOL);
+    exit($code);
+}
+
+function fmt_dur(int $ms): string
+{
+    $s = (int) round($ms / 1000);
+    return sprintf('%d:%02d', intdiv($s, 60), $s % 60);
+}
+
+function human_size(int $b): string
+{
+    $u = ['B', 'KB', 'MB', 'GB'];
+    $i = 0;
+    while ($b >= 1024 && $i < 3) {
+        $b /= 1024;
+        $i++;
+    }
+    return sprintf('%.1f%s', $b, $u[$i]);
+}
+
+try {
+    switch ($cmd) {
+        case 'health': {
+            $env = qsm_boot();
+            $h = $env['signer']->health();
+            out('签名服务: ' . (($h['ok'] ?? false) ? '正常' : '异常'));
+            out(json_encode($h, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            break;
+        }
+
+        case 'search': {
+            $kw = $pos[0] ?? fail('缺少关键词');
+            $env = qsm_boot((string) ($opts['account'] ?? 'current'));
+            $list = $env['api']->search($kw, 'track', '', (int) ($opts['limit'] ?? 20));
+            foreach ($list as $i => $t) {
+                $name = $t['name'] ?? '';
+                if ($name === '' && isset($t['name_parts'])) {
+                    foreach ($t['name_parts'] as $p) {
+                        $name .= is_array($p) ? ($p['text'] ?? '') : (string) $p;
+                    }
+                }
+                $artists = [];
+                foreach (($t['artists'] ?? []) as $a) {
+                    $artists[] = $a['name'] ?? '';
+                }
+                printf("%2d. %-40s %-22s %s  %s\n", $i + 1, mb_substr((string) $name, 0, 40),
+                    implode('/', $artists), fmt_dur((int) ($t['duration'] ?? 0)), (string) ($t['id'] ?? ''));
+            }
+            break;
+        }
+
+        case 'info': {
+            $id = $pos[0] ?? fail('缺少 track_id');
+            $env = qsm_boot((string) ($opts['account'] ?? 'current'));
+            $j = $env['api']->track($id);
+            $t = $j['track'] ?? [];
+            out('曲目: ' . (string) ($t['name'] ?? ''));
+            foreach (['album' => '专辑', 'duration' => '时长'] as $k => $label) {
+                if ($k === 'album') {
+                    out($label . ': ' . (string) ($t['album']['name'] ?? ''));
+                } else {
+                    out($label . ': ' . fmt_dur((int) ($t[$k] ?? 0)));
+                }
+            }
+            $a = $env['audio']->resolve($id);
+            out('音源: ' . count($a['sources']) . ' 档');
+            foreach ($a['sources'] as $s) {
+                printf("  - %-10s %-6s %-5s %6dkbps %8s enc=%s key=%s\n",
+                    $s['quality'], $s['vtype'], $s['codec'],
+                    intdiv((int) $s['bitrate'], 1000), human_size((int) $s['size']),
+                    $s['encrypted'] ? 'yes' : 'no', $s['key_hex'] !== '' ? $s['key_hex'] : '-');
+            }
+            if (!empty($a['is_preview'])) {
+                out('注意: ' . $a['preview_note']);
+                out('      完整音源需会员账号（当前账号未解锁 ' . implode('/', array_keys((array) ($a['declared_rates'] ?? []))) . '）');
+            }
+            if (!empty($a['vip_only'])) {
+                out('标记: 该曲目为会员专享（only_vip_playable / only_vip_download）');
+            }
+            break;
+        }
+
+        case 'url': {
+            $input = $pos[0] ?? fail('缺少曲目 ID / 链接 / 关键词');
+            $env = qsm_boot((string) ($opts['account'] ?? 'current'));
+            $ids = $env['share']->resolveToTrackIds($input, 1);
+            $a = $env['audio']->resolve($ids[0]);
+            $s = Qsm\Qishui\Audio::pick($a, $opts['quality'] ?? null);
+            if ($s === null) {
+                fail('没有可用音源');
+            }
+            out('曲目 ID : ' . $ids[0]);
+            out('音质    : ' . $s['quality'] . ' / ' . $s['vtype'] . ' / ' . $s['codec']);
+            out('大小    : ' . human_size((int) $s['size']));
+            out('加密    : ' . ($s['encrypted'] ? 'cenc-aes-ctr' : '无') . ($s['key_hex'] !== '' ? '  key=' . $s['key_hex'] : ''));
+            out('直链    : ' . $s['main_url']);
+            if ($s['backup_url'] !== '') {
+                out('备用    : ' . $s['backup_url']);
+            }
+            break;
+        }
+
+        case 'download': {
+            $input = $pos[0] ?? fail('缺少曲目 ID / 链接 / 关键词');
+            $account = (string) ($opts['account'] ?? 'current');
+            $env = qsm_boot($account);
+            $limit = (int) ($opts['limit'] ?? 1);
+            $ids = $env['share']->resolveToTrackIds($input, $limit);
+            out('待下载 ' . count($ids) . ' 首');
+            foreach ($ids as $n => $id) {
+                out(sprintf('[%d/%d] %s', $n + 1, count($ids), $id));
+                try {
+                    $r = $env['downloader']->download($id, [
+                        'quality' => (string) ($opts['quality'] ?? ''),
+                        'dir' => (string) ($opts['dir'] ?? Config::$downloadDir),
+                    ]);
+                    out('  → ' . $r['file'] . '  (' . human_size((int) $r['bytes']) . ', ' . $r['quality'] . ')');
+                    if (!empty($r['lyric_file'])) {
+                        out('  → ' . $r['lyric_file']);
+                    }
+                    if (!empty($r['is_preview'])) {
+                        out('  ! ' . ($r['preview_note'] ?: '这是试听片段，不是整首'));
+                    }
+                    if (!empty($r['decrypt_error'])) {
+                        out('  ! 未解密: ' . $r['decrypt_error']);
+                    }
+                } catch (\Throwable $e) {
+                    out('  ! 失败: ' . $e->getMessage());
+                }
+            }
+            break;
+        }
+
+        case 'decrypt': {
+            $in = $pos[0] ?? fail('缺少 m4a 路径');
+            $key = $pos[1] ?? fail('缺少 key');
+            $outFile = $pos[2] ?? (preg_replace('/\.\w+$/', '', $in) . '.dec.m4a');
+            $r = Cenc::decryptFile($in, $outFile, $key);
+            out(json_encode($r, JSON_UNESCAPED_UNICODE));
+            out('输出: ' . $outFile);
+            break;
+        }
+
+        case 'login-qr': {
+            $env = qsm_boot((string) ($opts['account'] ?? 'current'));
+            $q = $env['login']->begin();
+            out('请用汽水音乐 App 扫描下面的二维码内容：');
+            out($q['qr_content']);
+            out('');
+            out('token: ' . $q['token']);
+            out('等待扫码…（Ctrl+C 取消）');
+            $st = $env['login']->wait($q['token'], (int) ($opts['timeout'] ?? 180), 2, static function (array $s): void {
+                static $last = '';
+                if ($s['status'] !== $last) {
+                    $last = $s['status'];
+                    out('  状态: ' . $s['status']);
+                }
+            });
+            out('登录成功: ' . json_encode($st['user'], JSON_UNESCAPED_UNICODE));
+            out('cookie 已保存: ' . $env['jar']->path());
+            break;
+        }
+
+        case 'login-import': {
+            $dir = $opts['userdata'] ?? null;
+            $r = Importer::import($dir);
+            $jar = $r['jar'];
+            $jar->save(CookieJar::defaultFile((string) ($opts['account'] ?? 'current')));
+            $env = qsm_boot((string) ($opts['account'] ?? 'current'));
+            $user = null;
+            try {
+                $user = $env['login']->refreshUser();
+            } catch (\Throwable $e) {
+                out('（cookie 已保存，但校验失败: ' . $e->getMessage() . '）');
+            }
+            out('来源: ' . $r['source']);
+            out('cookie 条数: ' . $r['count']);
+            if ($user !== null) {
+                out('用户: ' . ($user['nickname'] ?: $user['uid']) . '  会员: ' . ($user['is_vip'] ? '是' : '否') . ' / ' . (string) $user['vip_type']);
+            }
+            out('已保存: ' . $jar->path());
+            break;
+        }
+
+        case 'whoami': {
+            $env = qsm_boot((string) ($opts['account'] ?? 'current'));
+            if ($env['jar']->isEmpty()) {
+                fail('还没有 cookie，先执行 login-import 或 login-qr');
+            }
+            $u = $env['login']->refreshUser();
+            out(json_encode($u, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            break;
+        }
+
+        case 'accounts': {
+            $list = CookieJar::list();
+            if ($list === []) {
+                out('（没有已保存账号）');
+            }
+            foreach ($list as $a) {
+                printf("%-12s uid=%-12s vip=%-6s %s\n", $a['name'], $a['uid'] ?: '-', (string) $a['vip'], $a['updated_at']);
+            }
+            break;
+        }
+
+        case 'help':
+        default:
+            out('汽水音乐工具');
+            out('');
+            out('  health                              检查签名服务');
+            out('  search <关键词>                      搜索曲目');
+            out('  info <track_id>                     曲目详情 + 音源档位');
+            out('  url <ID|链接|关键词>                 取直链与解密 key');
+            out('  download <ID|链接|关键词> [--quality=] [--dir=] [--limit=]');
+            out('  login-qr                            扫码登录');
+            out('  login-import [--userdata=路径]       从本机客户端导入 cookie');
+            out('  whoami                              当前账号与会员状态');
+            out('  accounts                            已保存账号列表');
+            out('  decrypt <file> <key> [out]           解密本地 m4a');
+            break;
+    }
+} catch (\Throwable $e) {
+    fail($e->getMessage());
+}

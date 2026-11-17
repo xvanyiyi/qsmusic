@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>汽水音乐解析 / 下载</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --panel2: #1c2330; --line: #262d3a;
+    --fg: #e6edf3; --dim: #8b98a9; --accent: #4c8dff; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 20px;
+    border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .grow { flex: 1; }
+  main { max-width: 1080px; margin: 0 auto; padding: 20px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input[type=text], input[type=password], select {
+    background: var(--panel2); border: 1px solid var(--line); color: var(--fg);
+    padding: 9px 12px; border-radius: 8px; outline: none; font-size: 14px; }
+  input[type=text]:focus { border-color: var(--accent); }
+  #q { flex: 1; min-width: 260px; }
+  button { background: var(--accent); color: #fff; border: 0; padding: 9px 16px;
+    border-radius: 8px; cursor: pointer; font-size: 14px; }
+  button.ghost { background: var(--panel2); border: 1px solid var(--line); color: var(--fg); }
+  button:disabled { opacity: .5; cursor: default; }
+  .muted { color: var(--dim); font-size: 12.5px; }
+  .track { display: flex; gap: 12px; padding: 10px; border-radius: 8px; align-items: center; }
+  .track:hover { background: var(--panel2); }
+  .track img { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; background: #222; }
+  .tname { font-weight: 600; }
+  .tag { font-size: 11px; padding: 1px 7px; border-radius: 20px; border: 1px solid var(--line); color: var(--dim); }
+  .tag.vip { color: var(--warn); border-color: #4a3a12; }
+  pre { background: #0b0e13; border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; overflow: auto; font-size: 12px; max-height: 320px; }
+  #qrbox { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  #qrwrap { background: #fff; padding: 10px; border-radius: 8px; min-width: 200px; min-height: 200px;
+    display: flex; align-items: center; justify-content: center; }
+  #qrwrap canvas, #qrwrap img { display: block; }
+  .kv { display: grid; grid-template-columns: 92px 1fr; gap: 4px 12px; font-size: 13px; }
+  .kv b { color: var(--dim); font-weight: 400; }
+  code { background: #0b0e13; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .toast { position: fixed; right: 20px; bottom: 20px; background: var(--panel2);
+    border: 1px solid var(--line); padding: 10px 14px; border-radius: 8px; max-width: 420px;
+    opacity: 0; transition: .25s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>汽水音乐解析 / 下载</h1>
+  <span class="muted" id="signerState"><span class="dot" style="background:var(--dim)"></span>检测中…</span>
+  <span class="grow"></span>
+  <span class="muted" id="accountState">未登录</span>
+  <button class="ghost" onclick="openPanel('login')">账号</button>
+</header>
+
+<main>
+  <div class="card">
+    <div class="row">
+      <input id="q" type="text" placeholder="粘贴分享链接 / 曲目 ID / 歌名歌手，回车执行">
+      <select id="mode">
+        <option value="search">搜索</option>
+        <option value="resolve">解析直链</option>
+        <option value="download">直接下载</option>
+      </select>
+      <select id="quality">
+        <option value="">最高音质</option>
+        <option value="lossless">lossless</option>
+        <option value="flac">flac</option>
+        <option value="hires">hires</option>
+        <option value="excellent">excellent</option>
+        <option value="higher">higher</option>
+        <option value="standard">standard</option>
+      </select>
+      <button id="go" onclick="run()">执行</button>
+    </div>
+    <div class="muted" style="margin-top:8px">
+      支持：qishui.douyin.com 分享短链、含 track_id 的链接、19 位曲目 ID、纯文本关键词。
+    </div>
+  </div>
+
+  <div class="card hidden" id="resultCard">
+    <div class="row" style="margin-bottom:8px">
+      <b id="resultTitle">结果</b>
+      <span class="grow"></span>
+      <span class="muted" id="resultMeta"></span>
+    </div>
+    <div id="result"></div>
+  </div>
+
+  <div class="card hidden" id="panel-login">
+    <div class="row" style="margin-bottom:12px">
+      <b>账号</b><span class="grow"></span>
+      <button class="ghost" onclick="closePanel('login')">收起</button>
+    </div>
+    <div class="row" style="margin-bottom:12px">
+      <button onclick="startQr()">扫码登录</button>
+      <button class="ghost" onclick="importCookie()">从本机客户端导入</button>
+      <button class="ghost" onclick="whoami()">刷新账号信息</button>
+    </div>
+    <div id="qrbox"></div>
+    <div style="margin-top:12px">
+      <div class="muted" style="margin-bottom:6px">或者直接粘贴客户端 cookie（含 sessionid）</div>
+      <div class="row">
+        <input id="ckInput" type="password" style="flex:1;min-width:280px" placeholder="sessionid=...; sessionid_ss=...; ...">
+        <button class="ghost" onclick="saveCookie()">保存</button>
+      </div>
+    </div>
+    <pre id="accountInfo" class="hidden"></pre>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+<script src="assets/qrcode.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const api = async (action, data = {}, qs = '') => {
+  const r = await fetch('?action=' + action + qs, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  const j = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }));
+  if (!j.ok) throw new Error(j.error || '请求失败');
+  return j;
+};
+function toast(msg, ms = 3200) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._t);
+  t._t = setTimeout(() => t.classList.remove('show'), ms);
+}
+function fmtDur(ms) {
+  const s = Math.round(ms / 1000);
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+function size(b) {
+  const u = ['B', 'KB', 'MB', 'GB']; let i = 0;
+  while (b >= 1024 && i < 3) { b /= 1024; i++; }
+  return b.toFixed(1) + u[i];
+}
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function refreshStatus() {
+  try {
+    const j = await api('status');
+    const okSigner = !!(j.signer && j.signer.ok);
+    $('#signerState').innerHTML = '<span class="dot" style="background:' + (okSigner ? 'var(--ok)' : 'var(--bad)') + '"></span>' +
+      (okSigner ? '签名服务正常' : '签名服务未启动');
+    $('#accountState').textContent = j.has_cookie ? ('账号: ' + j.current) : '未登录（匿名可下 128k）';
+  } catch (e) {
+    $('#signerState').innerHTML = '<span class="dot" style="background:var(--bad)"></span>签名服务未启动';
+  }
+}
+
+async function run() {
+  const input = $('#q').value.trim();
+  if (!input) return toast('请输入链接 / ID / 关键词');
+  const mode = $('#mode').value;
+  const btn = $('#go');
+  btn.disabled = true;
+  try {
+    if (mode === 'search') {
+      const j = await api('search', { q: input, limit: 20 });
+      renderTracks(j.tracks);
+    } else if (mode === 'resolve') {
+      const j = await api('resolve', { input });
+      renderResolve(j);
+    } else {
+      const j = await api('download', { input, quality: $('#quality').value, limit: 1 });
+      renderDownload(j);
+    }
+  } catch (e) {
+    toast('失败: ' + e.message, 6000);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderTracks(list) {
+  $('#resultCard').classList.remove('hidden');
+  $('#resultTitle').textContent = '搜索结果';
+  $('#resultMeta').textContent = list.length + ' 首';
+  $('#result').innerHTML = list.map(t => `
+    <div class="track">
+      ${t.cover ? `<img src="${esc(t.cover)}" referrerpolicy="no-referrer">` : '<img>'}
+      <div style="flex:1;min-width:0">
+        <div class="tname">${esc(t.name)} ${t.vip ? '<span class="tag vip">VIP</span>' : ''}</div>
+        <div class="muted">${esc(t.artists)} · ${esc(t.album)} · ${fmtDur(t.duration)}</div>
+      </div>
+      <button class="ghost" onclick="quickDownload('${t.id}')">下载</button>
+      <button class="ghost" onclick="quickResolve('${t.id}')">直链</button>
+    </div>`).join('');
+}
+
+function quickDownload(id) { $('#q').value = id; $('#mode').value = 'download'; run(); }
+function quickResolve(id) { $('#q').value = id; $('#mode').value = 'resolve'; run(); }
+
+function renderResolve(j) {
+  $('#resultCard').classList.remove('hidden');
+  $('#resultTitle').textContent = '解析结果';
+  $('#resultMeta').textContent = (j.parsed ? j.parsed.note : '');
+  const src = (j.audio && j.audio.sources) || [];
+  $('#result').innerHTML = `
+    <div class="kv" style="margin-bottom:10px">
+      <b>输入</b><span>${esc($('#q').value)}</span>
+      <b>类型</b><span>${esc(j.parsed && j.parsed.type)}</span>
+      <b>曲目</b><span>${esc((j.track_ids || []).join(', '))}</span>
+    </div>` + (src.length ? src.map(s => `
+    <div class="track">
+      <div style="flex:1;min-width:0">
+        <div class="tname">${esc(s.quality)} · ${esc(s.vtype)} · ${esc(s.codec)} · ${Math.round(s.bitrate / 1000)}kbps · ${size(s.size)}</div>
+        <div class="muted" style="word-break:break-all">${esc(s.main_url).slice(0, 160)}…</div>
+        <div class="muted">加密: ${s.encrypted ? 'cenc-aes-ctr' : '无'} ${s.key_hex ? '· key <code>' + esc(s.key_hex) + '</code>' : ''}</div>
+      </div>
+      <button class="ghost" onclick="copyText(${JSON.stringify(s.main_url)})">复制直链</button>
+      <button onclick="quickDownload('${esc((j.track_ids || [''])[0])}')">下载</button>
+    </div>`).join('') : '<div class="muted">没有可用音源（可能需要会员 cookie）</div>');
+}
+
+function renderDownload(j) {
+  $('#resultCard').classList.remove('hidden');
+  $('#resultTitle').textContent = '下载结果';
+  $('#resultMeta').textContent = j.dir || '';
+  $('#result').innerHTML = (j.results || []).map(r => r.error
+    ? `<div class="track"><div style="flex:1"><div class="tname" style="color:var(--bad)">失败</div><div class="muted">${esc(r.error)}</div></div></div>`
+    : `<div class="track"><div style="flex:1;min-width:0">
+        <div class="tname">${esc(r.artists ? r.artists + ' - ' + r.title : r.title)}</div>
+        <div class="muted">${esc(r.quality)} · ${size(r.bytes)} · ${r.encrypted ? (r.decrypt_error ? '未解密' : '已解密') : '未加密'}</div>
+        <div class="muted" style="word-break:break-all">${esc(r.file)}</div>
+      </div></div>`).join('');
+}
+
+function copyText(t) {
+  navigator.clipboard.writeText(t).then(() => toast('已复制'), () => toast('复制失败'));
+}
+
+function openPanel(id) {
+  $('#panel-' + id).classList.remove('hidden');
+}
+function closePanel(id) {
+  $('#panel-' + id).classList.add('hidden');
+}
+
+async function startQr() {
+  $('#qrbox').innerHTML = '<div class="muted">正在申请二维码…</div>';
+  try {
+    const j = await api('login_qr');
+    renderQr(j.qr);
+    pollQr(j.token);
+  } catch (e) {
+    const m = String(e.message || '');
+    const blocked = /4031|安全风险|版本过低/.test(m);
+    $('#qrbox').innerHTML = `<div class="muted" style="color:var(--warn)">扫码登录申请被 passport 风控拦下${blocked ? '（error_code=4031）' : ''}：${esc(m)}<br><br>
+      ${blocked ? '这不是版本或参数问题：passport 只放行带客户端设备证书的请求，纯协议复刻过不去（真实 Chrome 也一样）。<br>' : ''}
+      请改用下面的 <b>「从本机客户端读取」</b>（需要先退出汽水音乐客户端）或 <b>粘贴 cookie</b>，两条路都实测可用。</div>`;
+  }
+}
+
+function renderQr(content) {
+  const wrap = $('#qrwrap');
+  $('#qrbox').innerHTML = '<div id="qrwrap"></div><div style="flex:1;min-width:240px">' +
+    '<div class="muted" style="margin-bottom:6px">用汽水音乐 App 扫码</div>' +
+    '<div id="qrstatus" class="muted">等待扫描…</div>' +
+    '<pre style="margin-top:10px;max-height:120px">' + esc(content) + '</pre></div>';
+  const box = $('#qrwrap');
+  if (window.QRCode) {
+    new QRCode(box, { text: content, width: 200, height: 200, correctLevel: QRCode.CorrectLevel.M });
+  } else {
+    box.textContent = content;
+    box.style.fontSize = '10px';
+    box.style.wordBreak = 'break-all';
+  }
+}
+
+async function pollQr(token) {
+  let n = 0;
+  const tick = async () => {
+    n++;
+    if (n > 90) { $('#qrstatus').textContent = '超时，请重试'; return; }
+    try {
+      const j = await api('login_poll', { token });
+      const st = $('#qrstatus');
+      if (st) st.textContent = '状态: ' + j.status + (j.error_code ? '（err ' + j.error_code + '）' : '');
+      if (j.confirmed) {
+        st.textContent = '登录成功';
+        $('#accountInfo').classList.remove('hidden');
+        $('#accountInfo').textContent = JSON.stringify(j.user, null, 2);
+        refreshStatus();
+        toast('登录成功，cookie 已保存');
+        return;
+      }
+      if (j.status === 'expired') { st.textContent = '二维码已过期'; return; }
+    } catch (e) {
+      const st = $('#qrstatus');
+      if (st) st.textContent = '轮询失败: ' + e.message;
+    }
+    setTimeout(tick, 2000);
+  };
+  setTimeout(tick, 1500);
+}
+
+async function importCookie() {
+  toast('正在读取本机客户端…', 8000);
+  try {
+    const j = await api('import');
+    $('#accountInfo').classList.remove('hidden');
+    $('#accountInfo').textContent = JSON.stringify({
+      source: j.source, cookies: j.count, user: j.user, verify_error: j.verify_error
+    }, null, 2);
+    toast('已导入 ' + j.count + ' 条 cookie');
+    refreshStatus();
+  } catch (e) {
+    toast('导入失败: ' + e.message, 7000);
+  }
+}
+
+async function saveCookie() {
+  const ck = $('#ckInput').value.trim();
+  if (!ck) return toast('请粘贴 cookie');
+  try {
+    const j = await api('save_cookie', { cookie: ck });
+    $('#accountInfo').classList.remove('hidden');
+    $('#accountInfo').textContent = JSON.stringify(j.user, null, 2);
+    toast('cookie 已保存');
+    refreshStatus();
+  } catch (e) {
+    toast('保存失败: ' + e.message, 6000);
+  }
+}
+
+async function whoami() {
+  try {
+    const j = await api('whoami');
+    $('#accountInfo').classList.remove('hidden');
+    $('#accountInfo').textContent = JSON.stringify(j.user, null, 2);
+  } catch (e) {
+    toast('未登录: ' + e.message);
+  }
+}
+
+$('#q').addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+refreshStatus();
+</script>
+</body>
+</html>
